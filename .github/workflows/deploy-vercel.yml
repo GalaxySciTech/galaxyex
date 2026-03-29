@@ -42,10 +42,6 @@ jobs:
           echo "✅ Production deployment: $URL"
         working-directory: web
 
-      - name: Comment deployment URL
-        uses: actions/github-script@v7
-        if: always() && steps.deploy.outputs.deployment_url != ''
-        with:
-          script: |
-            const url = '${{ steps.deploy.outputs.deployment_url }}';
-            console.log(`Deployed to: ${url}`);
+      - name: Show deployment URL
+        run: |
+          echo "🚀 Deployed to: ${{ steps.deploy.outputs.deployment_url }}"
