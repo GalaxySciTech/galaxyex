@@ -162,7 +162,11 @@ export function accrueYield(days = 1) {
   return updates;
 }
 
-export function updateConfig(next: Partial<PlatformConfig>) {
+type PlatformConfigUpdate = Partial<Omit<PlatformConfig, "bot">> & {
+  bot?: Partial<PlatformConfig["bot"]>;
+};
+
+export function updateConfig(next: PlatformConfigUpdate) {
   if (typeof next.apy === "number") {
     config.apy = next.apy;
   }
