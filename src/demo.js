@@ -54,6 +54,10 @@ function runDemo() {
 
   const cancelled = ex.cancelOrder({ userId: "bob", orderId: ask2.id });
   print("Bob Cancels Order", cancelled);
+
+  const cancelledRemainder = ex.cancelOrder({ userId: "bob", orderId: ask.id });
+  print("Bob Cancels Remaining First Sell Order", cancelledRemainder);
+
   print("Final Balances", {
     alice: ex.getBalances("alice"),
     bob: ex.getBalances("bob"),
