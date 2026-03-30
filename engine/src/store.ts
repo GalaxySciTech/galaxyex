@@ -1,26 +1,55 @@
 import { randomUUID } from "node:crypto";
 import {
   BalanceModel,
+  LimitOrderModel,
   PlatformConfigModel,
   TradeModel,
   UserModel,
   YieldPositionModel,
 } from "./models.js";
-import type { Asset, PlatformConfig, Trade, TradeSide, TradingPair, YieldPosition } from "./types.js";
+import type { Asset, PlatformConfig, PriceStats, Trade, TradeSide, TradingPair, YieldPosition } from "./types.js";
 
 type Prices = Record<TradingPair, number>;
+type Stats = Record<TradingPair, PriceStats>;
 
 let prices: Prices = {
   "BTC/USDT": 65000,
   "ETH/USDT": 3400,
+  "SOL/USDT": 155,
+  "BNB/USDT": 580,
+};
+
+let marketStats: Stats = {
+  "BTC/USDT": { pair: "BTC/USDT", price: 65000, open24h: 63800, high24h: 66200, low24h: 63200, volume24h: 18420000000, changePercent24h: 1.88 },
+  "ETH/USDT": { pair: "ETH/USDT", price: 3400, open24h: 3320, high24h: 3480, low24h: 3300, volume24h: 8900000000, changePercent24h: 2.41 },
+  "SOL/USDT": { pair: "SOL/USDT", price: 155, open24h: 149, high24h: 158, low24h: 147, volume24h: 2100000000, changePercent24h: 4.03 },
+  "BNB/USDT": { pair: "BNB/USDT", price: 580, open24h: 571, high24h: 588, low24h: 568, volume24h: 1250000000, changePercent24h: 1.58 },
 };
 
 export function setPrices(nextPrices: Partial<Prices>) {
   prices = { ...prices, ...nextPrices };
+  // Update price in stats too
+  for (const [pair, price] of Object.entries(nextPrices) as [TradingPair, number][]) {
+    if (marketStats[pair]) {
+      marketStats[pair] = { ...marketStats[pair], price };
+    }
+  }
+}
+
+export function setMarketStats(nextStats: Partial<Stats>) {
+  marketStats = { ...marketStats, ...nextStats };
+  // Keep prices in sync
+  for (const [pair, stat] of Object.entries(nextStats) as [TradingPair, PriceStats][]) {
+    prices[pair] = stat.price;
+  }
 }
 
 export function getCurrentPrices() {
   return prices;
+}
+
+export function getMarketStats() {
+  return marketStats;
 }
 
 async function getConfig(): Promise<PlatformConfig> {
@@ -45,6 +74,8 @@ async function ensureBalances(userId: string) {
     { asset: "USDT", available: 12000, inEarn: 0 },
     { asset: "BTC", available: 0.15, inEarn: 0 },
     { asset: "ETH", available: 2.5, inEarn: 0 },
+    { asset: "SOL", available: 50, inEarn: 0 },
+    { asset: "BNB", available: 10, inEarn: 0 },
   ];
 
   for (const d of defaults) {
@@ -56,7 +87,7 @@ async function ensureBalances(userId: string) {
   }
 }
 
-export async function getState(userId: string) {
+export async function getState(userId: string, page = 1, limit = 25) {
   const user = await UserModel.findById(userId).catch(() => null);
   if (!user) {
     throw new Error(`User ${userId} not found.`);
@@ -64,10 +95,14 @@ export async function getState(userId: string) {
 
   await ensureBalances(userId);
 
-  const [balanceDocs, tradeDocs, yieldDocs, config] = await Promise.all([
+  const skip = (page - 1) * limit;
+
+  const [balanceDocs, tradeDocs, tradeCount, yieldDocs, openOrderDocs, config] = await Promise.all([
     BalanceModel.find({ userId }),
-    TradeModel.find({ userId }).sort({ createdAt: -1 }).limit(25),
+    TradeModel.find({ userId }).sort({ createdAt: -1 }).skip(skip).limit(limit),
+    TradeModel.countDocuments({ userId }),
     YieldPositionModel.find({ userId }),
+    LimitOrderModel.find({ userId, status: "open" }).sort({ createdAt: -1 }),
     getConfig(),
   ]);
 
@@ -89,6 +124,7 @@ export async function getState(userId: string) {
       status: t.status,
       createdAt: t.createdAt,
     })),
+    tradePagination: { page, limit, total: tradeCount, pages: Math.ceil(tradeCount / limit) },
     yieldPositions: yieldDocs.map((y) => ({
       id: y.positionId,
       userId: y.userId,
@@ -97,7 +133,22 @@ export async function getState(userId: string) {
       accruedProfit: y.accruedProfit,
       startedAt: y.startedAt,
       lastAccruedAt: y.lastAccruedAt,
+      redeemedAt: y.redeemedAt,
       status: y.status,
+      productName: y.productName,
+      durationDays: y.durationDays,
+      flexible: y.flexible,
+    })),
+    openOrders: openOrderDocs.map((o) => ({
+      id: o.orderId,
+      userId: o.userId,
+      pair: o.pair,
+      side: o.side,
+      quantity: o.quantity,
+      limitPrice: o.limitPrice,
+      filledQuantity: o.filledQuantity,
+      status: o.status,
+      createdAt: o.createdAt,
     })),
     apy: config.apy,
     tradingFeeBps: config.tradingFeeBps,
@@ -108,6 +159,7 @@ export async function getState(userId: string) {
       max_order_notional: config.bot.maxOrderNotional,
     },
     prices,
+    marketStats,
   };
 }
 
@@ -165,7 +217,129 @@ export async function simulateTrade(input: {
   };
 }
 
-export async function openYieldPosition(userId: string, amount: number): Promise<YieldPosition> {
+export async function placeLimitOrder(input: {
+  userId: string;
+  pair: TradingPair;
+  side: TradeSide;
+  quantity: number;
+  limitPrice: number;
+}) {
+  const { userId, pair, side, quantity, limitPrice } = input;
+  const base = pair.split("/")[0] as Exclude<Asset, "USDT">;
+  const config = await getConfig();
+
+  await ensureBalances(userId);
+
+  // Reserve funds at order placement
+  if (side === "buy") {
+    const notional = quantity * limitPrice;
+    const fee = (notional * config.tradingFeeBps) / 10_000;
+    const required = notional + fee;
+    const usdtBal = await BalanceModel.findOne({ userId, asset: "USDT" });
+    if (!usdtBal || usdtBal.available < required) {
+      throw new Error("Insufficient USDT for limit order.");
+    }
+    await BalanceModel.updateOne({ userId, asset: "USDT" }, { $inc: { available: -required } });
+  } else {
+    const baseBal = await BalanceModel.findOne({ userId, asset: base });
+    if (!baseBal || baseBal.available < quantity) {
+      throw new Error(`Insufficient ${base} for limit order.`);
+    }
+    await BalanceModel.updateOne({ userId, asset: base }, { $inc: { available: -quantity } });
+  }
+
+  const orderId = randomUUID();
+  const order = await LimitOrderModel.create({ orderId, userId, pair, side, quantity, limitPrice, filledQuantity: 0, status: "open" });
+
+  return {
+    id: order.orderId,
+    userId: order.userId,
+    pair: order.pair,
+    side: order.side,
+    quantity: order.quantity,
+    limitPrice: order.limitPrice,
+    status: order.status,
+    createdAt: order.createdAt,
+  };
+}
+
+export async function cancelLimitOrder(userId: string, orderId: string) {
+  const order = await LimitOrderModel.findOne({ orderId, userId, status: "open" });
+  if (!order) throw new Error("Order not found or already closed.");
+
+  const base = order.pair.split("/")[0] as Exclude<Asset, "USDT">;
+  const config = await getConfig();
+
+  // Refund reserved funds
+  if (order.side === "buy") {
+    const remainingQty = order.quantity - order.filledQuantity;
+    const notional = remainingQty * order.limitPrice;
+    const fee = (notional * config.tradingFeeBps) / 10_000;
+    await BalanceModel.updateOne({ userId, asset: "USDT" }, { $inc: { available: notional + fee } });
+  } else {
+    const remainingQty = order.quantity - order.filledQuantity;
+    await BalanceModel.updateOne({ userId, asset: base }, { $inc: { available: remainingQty } });
+  }
+
+  await LimitOrderModel.updateOne({ orderId }, { $set: { status: "cancelled" } });
+  return { orderId, status: "cancelled" };
+}
+
+export async function fillPendingLimitOrders() {
+  const openOrders = await LimitOrderModel.find({ status: "open" });
+  const filled: string[] = [];
+
+  for (const order of openOrders) {
+    const currentPrice = prices[order.pair];
+    const shouldFill =
+      (order.side === "buy" && currentPrice <= order.limitPrice) ||
+      (order.side === "sell" && currentPrice >= order.limitPrice);
+
+    if (!shouldFill) continue;
+
+    const config = await getConfig();
+    const base = order.pair.split("/")[0] as Exclude<Asset, "USDT">;
+    const remainingQty = order.quantity - order.filledQuantity;
+    const executionPrice = order.limitPrice;
+    const notional = remainingQty * executionPrice;
+    const fee = (notional * config.tradingFeeBps) / 10_000;
+
+    if (order.side === "buy") {
+      await BalanceModel.updateOne({ userId: order.userId, asset: base }, { $inc: { available: remainingQty } });
+    } else {
+      await BalanceModel.updateOne({ userId: order.userId, asset: "USDT" }, { $inc: { available: notional - fee } });
+    }
+
+    const tradeId = randomUUID();
+    await TradeModel.create({
+      tradeId,
+      userId: order.userId,
+      pair: order.pair,
+      side: order.side,
+      quantity: remainingQty,
+      price: executionPrice,
+      fee,
+      status: "filled",
+    });
+
+    await LimitOrderModel.updateOne(
+      { orderId: order.orderId },
+      { $set: { status: "filled", filledQuantity: order.quantity } },
+    );
+
+    filled.push(order.orderId);
+  }
+
+  return filled;
+}
+
+export async function openYieldPosition(
+  userId: string,
+  amount: number,
+  productName = "Flexible Savings",
+  durationDays = 0,
+  flexible = true,
+): Promise<YieldPosition> {
   if (amount <= 0) {
     throw new Error("Amount must be greater than zero.");
   }
@@ -178,6 +352,9 @@ export async function openYieldPosition(userId: string, amount: number): Promise
     throw new Error("Insufficient USDT balance for earn position.");
   }
 
+  // Flexible products earn same APY; fixed products earn 15% bonus
+  const apy = flexible ? config.apy : Math.round(config.apy * 1.15 * 10) / 10;
+
   await BalanceModel.updateOne({ userId, asset: "USDT" }, { $inc: { available: -amount, inEarn: amount } });
 
   const positionId = randomUUID();
@@ -186,23 +363,52 @@ export async function openYieldPosition(userId: string, amount: number): Promise
     positionId,
     userId,
     amount,
-    apy: config.apy,
+    apy,
     accruedProfit: 0,
     startedAt: now,
     lastAccruedAt: now,
     status: "active",
+    productName,
+    durationDays,
+    flexible,
   });
 
   return {
     id: positionId,
     userId,
     amount,
-    apy: config.apy,
+    apy,
     accruedProfit: 0,
     startedAt: now.toISOString(),
     lastAccruedAt: now.toISOString(),
     status: "active",
   };
+}
+
+export async function redeemYieldPosition(userId: string, positionId: string): Promise<{ redeemed: number }> {
+  const position = await YieldPositionModel.findOne({ positionId, userId, status: "active" });
+  if (!position) throw new Error("Active position not found.");
+
+  if (!position.flexible) {
+    const daysSinceStart = (Date.now() - position.startedAt.getTime()) / 86_400_000;
+    if (daysSinceStart < position.durationDays) {
+      throw new Error(`Fixed product cannot be redeemed before ${position.durationDays} days.`);
+    }
+  }
+
+  const total = position.amount + position.accruedProfit;
+
+  await BalanceModel.updateOne(
+    { userId, asset: "USDT" },
+    { $inc: { available: total, inEarn: -position.amount } },
+  );
+
+  await YieldPositionModel.updateOne(
+    { positionId },
+    { $set: { status: "closed", redeemedAt: new Date() } },
+  );
+
+  return { redeemed: total };
 }
 
 export async function accrueYield(days = 1) {
@@ -271,7 +477,7 @@ export async function generateBotTrades() {
 
   const trades: Trade[] = [];
   const count = Math.max(1, Math.min(config.bot.tradesPerMinute, 30));
-  const pairs: TradingPair[] = ["BTC/USDT", "ETH/USDT"];
+  const pairs: TradingPair[] = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"];
 
   for (let i = 0; i < count; i++) {
     const pair = pairs[Math.floor(Math.random() * pairs.length)];

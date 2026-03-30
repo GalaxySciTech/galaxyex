@@ -4,14 +4,19 @@ import { z } from "zod";
 import {
   accrueYield,
   adjustBalance,
+  cancelLimitOrder,
   generateBotTrades,
+  getMarketStats,
   getState,
   openYieldPosition,
+  placeLimitOrder,
+  redeemYieldPosition,
   setPrices,
+  setMarketStats,
   simulateTrade,
   updateConfig,
 } from "./store.js";
-import { getMarketPrices } from "./price-feed.js";
+import { getMarketPrices, getMarketStats as fetchMarketStats } from "./price-feed.js";
 import {
   getDemoUser,
   requireAdmin,
@@ -80,6 +85,23 @@ app.get("/api/auth/me", requireAuth, (req: AuthRequest, res) => {
   res.json(req.auth);
 });
 
+// ── Market data ───────────────────────────────────────────────────────────────
+
+app.get("/api/markets", (_, res) => {
+  res.json({ stats: Object.values(getMarketStats()) });
+});
+
+app.get("/api/markets/:pair", (req, res) => {
+  const pair = String(req.params.pair).replace("-", "/");
+  const stats = getMarketStats();
+  const stat = Object.values(stats).find((s) => s.pair === pair);
+  if (!stat) {
+    res.status(404).json({ message: "Pair not found." });
+    return;
+  }
+  res.json(stat);
+});
+
 // ── Simulation state ──────────────────────────────────────────────────────────
 
 app.get("/api/state/demo", async (_, res) => {
@@ -89,27 +111,20 @@ app.get("/api/state/demo", async (_, res) => {
       res.status(404).json({ message: "Demo user not found." });
       return;
     }
-    const state = await getState(String(demoUser._id));
+    const page = 1;
+    const state = await getState(String(demoUser._id), page);
     res.json(state);
   } catch (error) {
     res.status(500).json({ message: (error as Error).message });
   }
 });
 
-app.get("/api/state/:userId", async (req, res) => {
-  try {
-    const state = await getState(req.params.userId);
-    res.json(state);
-  } catch (error) {
-    const msg = (error as Error).message;
-    const status = msg.includes("not found") ? 404 : 500;
-    res.status(status).json({ message: msg });
-  }
-});
-
+// Authenticated user's own state
 app.get("/api/state", requireAuth, async (req: AuthRequest, res) => {
   try {
-    const state = await getState(req.auth!.userId);
+    const page = Number(Array.isArray(req.query.page) ? req.query.page[0] : req.query.page ?? 1);
+    const limit = Number(Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit ?? 25);
+    const state = await getState(req.auth!.userId, page, limit);
     res.json(state);
   } catch (error) {
     res.status(500).json({ message: (error as Error).message });
@@ -119,9 +134,16 @@ app.get("/api/state", requireAuth, async (req: AuthRequest, res) => {
 // ── Trade ─────────────────────────────────────────────────────────────────────
 
 const tradeSchema = z.object({
-  pair: z.enum(["BTC/USDT", "ETH/USDT"]),
+  pair: z.enum(["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]),
   side: z.enum(["buy", "sell"]),
   quantity: z.number().positive(),
+});
+
+const limitOrderSchema = z.object({
+  pair: z.enum(["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]),
+  side: z.enum(["buy", "sell"]),
+  quantity: z.number().positive(),
+  limitPrice: z.number().positive(),
 });
 
 app.post("/api/trade", requireAuth, async (req: AuthRequest, res) => {
@@ -144,10 +166,44 @@ app.post("/api/trade", requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+app.post("/api/orders/limit", requireAuth, async (req: AuthRequest, res) => {
+  const parsed = limitOrderSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: "Invalid limit order payload." });
+    return;
+  }
+
+  try {
+    const order = await placeLimitOrder({
+      userId: req.auth!.userId,
+      pair: parsed.data.pair,
+      side: parsed.data.side,
+      quantity: parsed.data.quantity,
+      limitPrice: parsed.data.limitPrice,
+    });
+    res.json({ order });
+  } catch (error) {
+    res.status(400).json({ message: (error as Error).message });
+  }
+});
+
+app.delete("/api/orders/:orderId", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const orderId = String(req.params.orderId);
+    const result = await cancelLimitOrder(req.auth!.userId, orderId);
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ message: (error as Error).message });
+  }
+});
+
 // ── Earn ──────────────────────────────────────────────────────────────────────
 
 const earnSchema = z.object({
   amount: z.number().positive(),
+  productName: z.string().optional(),
+  durationDays: z.number().int().min(0).optional(),
+  flexible: z.boolean().optional(),
 });
 
 app.post("/api/earn/subscribe", requireAuth, async (req: AuthRequest, res) => {
@@ -158,8 +214,24 @@ app.post("/api/earn/subscribe", requireAuth, async (req: AuthRequest, res) => {
   }
 
   try {
-    const position = await openYieldPosition(req.auth!.userId, parsed.data.amount);
+    const position = await openYieldPosition(
+      req.auth!.userId,
+      parsed.data.amount,
+      parsed.data.productName,
+      parsed.data.durationDays,
+      parsed.data.flexible,
+    );
     res.json({ position });
+  } catch (error) {
+    res.status(400).json({ message: (error as Error).message });
+  }
+});
+
+app.post("/api/earn/redeem/:positionId", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const positionId = String(req.params.positionId);
+    const result = await redeemYieldPosition(req.auth!.userId, positionId);
+    res.json(result);
   } catch (error) {
     res.status(400).json({ message: (error as Error).message });
   }
@@ -207,7 +279,7 @@ app.post("/api/admin/config", requireAdmin, async (req, res) => {
 
 const adjustSchema = z.object({
   userId: z.string(),
-  asset: z.enum(["USDT", "BTC", "ETH"]),
+  asset: z.enum(["USDT", "BTC", "ETH", "SOL", "BNB"]),
   delta: z.number(),
 });
 
@@ -240,6 +312,10 @@ app.post("/api/bot/tick", requireAdmin, async (_, res) => {
 // ── Price refresh ─────────────────────────────────────────────────────────────
 
 export async function refreshPrices() {
-  const latest = await getMarketPrices();
-  setPrices(latest);
+  const [latestPrices, latestStats] = await Promise.all([
+    getMarketPrices(),
+    fetchMarketStats(),
+  ]);
+  setPrices(latestPrices);
+  setMarketStats(latestStats);
 }

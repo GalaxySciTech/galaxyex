@@ -1,4 +1,4 @@
-import { SimulationState } from "@/lib/types";
+import { SimulationState, PriceStats, TradingPair } from "@/lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_ENGINE_URL ?? "http://localhost:8080";
 
@@ -85,6 +85,29 @@ export async function login(email: string, password: string): Promise<AuthRespon
   });
 }
 
+// ── Market Data ───────────────────────────────────────────────────────────────
+
+export async function fetchMarketStats(): Promise<PriceStats[]> {
+  const data = await request<{ stats: Array<{
+    pair: string;
+    price: number;
+    open24h: number;
+    high24h: number;
+    low24h: number;
+    volume24h: number;
+    changePercent24h: number;
+  }> }>("/api/markets");
+  return data.stats.map((s) => ({
+    pair: s.pair as TradingPair,
+    price: s.price,
+    open24h: s.open24h,
+    high24h: s.high24h,
+    low24h: s.low24h,
+    volume24h: s.volume24h,
+    changePercent24h: s.changePercent24h,
+  }));
+}
+
 // ── Simulation state ──────────────────────────────────────────────────────────
 
 type RawState = {
@@ -101,6 +124,7 @@ type RawState = {
     status: "filled";
     createdAt: string;
   }>;
+  tradePagination: { page: number; limit: number; total: number; pages: number };
   yieldPositions: Array<{
     id: string;
     userId: string;
@@ -109,13 +133,37 @@ type RawState = {
     accruedProfit: number;
     startedAt: string;
     lastAccruedAt: string;
+    redeemedAt?: string;
     status: "active" | "closed";
+    productName: string;
+    durationDays: number;
+    flexible: boolean;
+  }>;
+  openOrders: Array<{
+    id: string;
+    userId: string;
+    pair: string;
+    side: string;
+    quantity: number;
+    limitPrice: number;
+    filledQuantity: number;
+    status: "open" | "filled" | "cancelled";
+    createdAt: string;
   }>;
   apy: number;
   tradingFeeBps: number;
   spreadBps: number;
   botConfig: { enabled: boolean; trades_per_minute: number; max_order_notional: number };
   prices: Record<string, number>;
+  marketStats: Record<string, {
+    pair: string;
+    price: number;
+    open24h: number;
+    high24h: number;
+    low24h: number;
+    volume24h: number;
+    changePercent24h: number;
+  }>;
 };
 
 function normalizeState(data: RawState): SimulationState {
@@ -140,6 +188,7 @@ function normalizeState(data: RawState): SimulationState {
       status: t.status,
       created_at: t.createdAt,
     })),
+    tradePagination: data.tradePagination ?? { page: 1, limit: 25, total: 0, pages: 1 },
     yieldPositions: data.yieldPositions.map((y) => ({
       id: y.id,
       user_id: y.userId,
@@ -148,7 +197,22 @@ function normalizeState(data: RawState): SimulationState {
       accrued_profit: y.accruedProfit,
       started_at: y.startedAt,
       last_accrued_at: y.lastAccruedAt,
+      redeemed_at: y.redeemedAt,
       status: y.status,
+      product_name: y.productName ?? "Flexible Savings",
+      duration_days: y.durationDays ?? 0,
+      flexible: y.flexible ?? true,
+    })),
+    openOrders: (data.openOrders ?? []).map((o) => ({
+      id: o.id,
+      user_id: o.userId,
+      pair: o.pair as SimulationState["trades"][number]["pair"],
+      side: o.side as "buy" | "sell",
+      quantity: o.quantity,
+      limit_price: o.limitPrice,
+      filled_quantity: o.filledQuantity,
+      status: o.status,
+      created_at: o.createdAt,
     })),
     apy: data.apy,
     tradingFeeBps: data.tradingFeeBps,
@@ -159,11 +223,22 @@ function normalizeState(data: RawState): SimulationState {
       max_order_notional: data.botConfig.max_order_notional,
     },
     prices: data.prices as SimulationState["prices"],
+    marketStats: Object.fromEntries(
+      Object.entries(data.marketStats ?? {}).map(([k, v]) => [k, {
+        pair: v.pair as TradingPair,
+        price: v.price,
+        open24h: v.open24h,
+        high24h: v.high24h,
+        low24h: v.low24h,
+        volume24h: v.volume24h,
+        changePercent24h: v.changePercent24h,
+      }])
+    ) as SimulationState["marketStats"],
   };
 }
 
-export async function fetchSimulationState(): Promise<SimulationState> {
-  const data = await request<RawState>("/api/state");
+export async function fetchSimulationState(page = 1): Promise<SimulationState> {
+  const data = await request<RawState>(`/api/state?page=${page}`);
   return normalizeState(data);
 }
 
@@ -194,6 +269,34 @@ export async function executeTrade(pair: string, side: "buy" | "sell", quantity:
   });
 }
 
+export interface LimitOrderResult {
+  order: {
+    id: string;
+    pair: string;
+    side: "buy" | "sell";
+    quantity: number;
+    limitPrice: number;
+    status: "open";
+    createdAt: string;
+  };
+}
+
+export async function placeLimitOrder(
+  pair: string,
+  side: "buy" | "sell",
+  quantity: number,
+  limitPrice: number,
+): Promise<LimitOrderResult> {
+  return request<LimitOrderResult>("/api/orders/limit", {
+    method: "POST",
+    body: JSON.stringify({ pair, side, quantity, limitPrice }),
+  });
+}
+
+export async function cancelOrder(orderId: string): Promise<{ orderId: string; status: string }> {
+  return request(`/api/orders/${orderId}`, { method: "DELETE" });
+}
+
 // ── Earn ──────────────────────────────────────────────────────────────────────
 
 export interface EarnResult {
@@ -204,13 +307,27 @@ export interface EarnResult {
     accruedProfit: number;
     startedAt: string;
     status: "active";
+    productName: string;
+    durationDays: number;
+    flexible: boolean;
   };
 }
 
-export async function subscribeEarn(amount: number): Promise<EarnResult> {
+export async function subscribeEarn(
+  amount: number,
+  productName?: string,
+  durationDays?: number,
+  flexible?: boolean,
+): Promise<EarnResult> {
   return request<EarnResult>("/api/earn/subscribe", {
     method: "POST",
-    body: JSON.stringify({ amount }),
+    body: JSON.stringify({ amount, productName, durationDays, flexible }),
+  });
+}
+
+export async function redeemEarn(positionId: string): Promise<{ redeemed: number }> {
+  return request<{ redeemed: number }>(`/api/earn/redeem/${positionId}`, {
+    method: "POST",
   });
 }
 
