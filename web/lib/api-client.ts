@@ -168,7 +168,7 @@ export async function fetchSimulationState(): Promise<SimulationState> {
 }
 
 export async function fetchDemoState(): Promise<SimulationState> {
-  const data = await request<RawState>("/api/state/demo-user-1");
+  const data = await request<RawState>("/api/state/demo");
   return normalizeState(data);
 }
 

@@ -80,7 +80,7 @@ function normalizeState(data: RawState): SimulationState {
 
 export async function getSimulationState(): Promise<SimulationState> {
   try {
-    const response = await fetch(`${API_BASE}/api/state/demo-user-1`, {
+    const response = await fetch(`${API_BASE}/api/state/demo`, {
       cache: "no-store",
     });
 

@@ -7,7 +7,7 @@ import type { SimulationState } from "@/lib/types";
 import { fetchDemoState, fetchSimulationState, getStoredAuth, saveAdminConfig } from "@/lib/api-client";
 
 export default function AdminPage() {
-  const [state, setState] = useState<SimulationState>(demoState);
+  const [, setState] = useState<SimulationState>(demoState);
   const [apy, setApy] = useState(String(demoState.apy));
   const [spread, setSpread] = useState(String(demoState.spreadBps));
   const [fee, setFee] = useState(String(demoState.tradingFeeBps));

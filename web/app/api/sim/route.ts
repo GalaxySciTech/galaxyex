@@ -5,7 +5,7 @@ const API_BASE = process.env.NEXT_PUBLIC_ENGINE_URL ?? "http://localhost:8080";
 
 export async function GET() {
   try {
-    const response = await fetch(`${API_BASE}/api/state/demo-user-1`, {
+    const response = await fetch(`${API_BASE}/api/state/demo`, {
       cache: "no-store",
     });
 
