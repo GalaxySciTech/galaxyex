@@ -1,14 +1,23 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { formatAsset, formatCurrency, percent } from "@/lib/format";
-import { getSimulationState } from "@/lib/sim-client";
+import type { SimulationState } from "@/lib/types";
+import { demoState } from "@/lib/mock-data";
+import { fetchDemoState, fetchSimulationState, getStoredAuth } from "@/lib/api-client";
 
-export default async function DashboardPage() {
-  const state = await getSimulationState();
+export default function DashboardPage() {
+  const [state, setState] = useState<SimulationState>(demoState);
+
+  useEffect(() => {
+    const auth = getStoredAuth();
+    const load = auth ? fetchSimulationState() : fetchDemoState();
+    load.then(setState).catch(() => setState(demoState));
+  }, []);
 
   const totalSpot = state.balances.reduce((sum, b) => {
-    if (b.asset === "USDT") {
-      return sum + b.available;
-    }
+    if (b.asset === "USDT") return sum + b.available;
     const pair = `${b.asset}/USDT` as const;
     const px = state.prices[pair] ?? 0;
     return sum + b.available * px;

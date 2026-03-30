@@ -1,9 +1,20 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { formatAsset, formatCurrency } from "@/lib/format";
-import { getSimulationState } from "@/lib/sim-client";
+import type { SimulationState } from "@/lib/types";
+import { demoState } from "@/lib/mock-data";
+import { fetchDemoState, fetchSimulationState, getStoredAuth } from "@/lib/api-client";
 
-export default async function WalletPage() {
-  const state = await getSimulationState();
+export default function WalletPage() {
+  const [state, setState] = useState<SimulationState>(demoState);
+
+  useEffect(() => {
+    const auth = getStoredAuth();
+    const load = auth ? fetchSimulationState() : fetchDemoState();
+    load.then(setState).catch(() => setState(demoState));
+  }, []);
 
   return (
     <AppShell title="Wallet" subtitle="Internal custody ledger">
