@@ -3,6 +3,7 @@ import {
   BalanceModel,
   PlatformConfigModel,
   TradeModel,
+  UserModel,
   YieldPositionModel,
 } from "./models.js";
 import type { Asset, PlatformConfig, Trade, TradeSide, TradingPair, YieldPosition } from "./types.js";
@@ -50,12 +51,17 @@ async function ensureBalances(userId: string) {
     await BalanceModel.findOneAndUpdate(
       { userId, asset: d.asset },
       { $setOnInsert: { userId, asset: d.asset, available: d.available, inEarn: d.inEarn } },
-      { upsert: true, new: false },
+      { upsert: true, returnDocument: "before" },
     );
   }
 }
 
 export async function getState(userId: string) {
+  const user = await UserModel.findById(userId).catch(() => null);
+  if (!user) {
+    throw new Error(`User ${userId} not found.`);
+  }
+
   await ensureBalances(userId);
 
   const [balanceDocs, tradeDocs, yieldDocs, config] = await Promise.all([
@@ -235,7 +241,7 @@ export async function updateConfig(next: {
   const doc = await PlatformConfigModel.findOneAndUpdate(
     { key: "global" },
     { $set: update },
-    { upsert: true, new: true },
+    { upsert: true, returnDocument: "after" },
   );
 
   return doc;
@@ -243,10 +249,18 @@ export async function updateConfig(next: {
 
 export async function adjustBalance(userId: string, asset: Asset, delta: number) {
   await ensureBalances(userId);
+
+  if (delta < 0) {
+    const current = await BalanceModel.findOne({ userId, asset });
+    if (!current || current.available + delta < 0) {
+      throw new Error(`Insufficient ${asset} balance for adjustment.`);
+    }
+  }
+
   const doc = await BalanceModel.findOneAndUpdate(
     { userId, asset },
     { $inc: { available: delta } },
-    { new: true },
+    { returnDocument: "after" },
   );
   return doc;
 }
@@ -264,7 +278,7 @@ export async function generateBotTrades() {
     const side: TradeSide = Math.random() > 0.5 ? "buy" : "sell";
     const px = prices[pair];
     const maxQty = config.bot.maxOrderNotional / px;
-    const qty = Number((Math.random() * maxQty).toFixed(6));
+    const qty = Number((Math.max(1e-6, Math.random() * maxQty)).toFixed(6));
     const tradeId = randomUUID();
     const botUserId = "bot-liquidity";
 

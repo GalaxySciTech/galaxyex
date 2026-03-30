@@ -65,8 +65,19 @@ export default function TradePage() {
     }
   };
 
+  const usdtBal = state.balances.find((b) => b.asset === "USDT");
+  const baseBal = state.balances.find((b) => b.asset === pair.split("/")[0]);
+
   return (
     <AppShell title="Trade" subtitle="Instant execution with simulated spread">
+      <section className="mb-2 flex gap-4 flex-wrap text-sm text-slate-300">
+        {state.balances.map((b) => (
+          <span key={b.asset} className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1">
+            <span className="text-slate-400">{b.asset}:</span>{" "}
+            <span className="font-medium">{formatAsset(b.available)}</span>
+          </span>
+        ))}
+      </section>
       <section className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
           <h2 className="text-lg font-medium">Place order</h2>
@@ -109,6 +120,17 @@ export default function TradePage() {
                 className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2"
               />
             </label>
+
+            {side === "buy" && usdtBal && notional + fee > usdtBal.available && (
+              <p className="rounded-md border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs text-rose-400">
+                Insufficient USDT — need {formatCurrency(notional + fee)}, have {formatCurrency(usdtBal.available)}
+              </p>
+            )}
+            {side === "sell" && baseBal && Number(quantity) > baseBal.available && (
+              <p className="rounded-md border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs text-rose-400">
+                Insufficient {pair.split("/")[0]} — need {formatAsset(Number(quantity), 6)}, have {formatAsset(baseBal.available, 6)}
+              </p>
+            )}
 
             <button
               onClick={submitTrade}

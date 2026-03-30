@@ -1,28 +1,20 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
-import { formatAsset } from "@/lib/format";
-import { getSimulationState } from "@/lib/sim-client";
+import { formatAsset, formatCurrency } from "@/lib/format";
+import type { SimulationState } from "@/lib/types";
+import { demoState } from "@/lib/mock-data";
+import { fetchDemoState, fetchSimulationState, getStoredAuth } from "@/lib/api-client";
 
-const history = [
-  {
-    id: "wh-1",
-    type: "admin_credit",
-    asset: "USDT",
-    amount: 5000,
-    at: "2026-03-28 13:20 UTC",
-    note: "Manual deposit approval",
-  },
-  {
-    id: "wh-2",
-    type: "earn_lock",
-    asset: "USDT",
-    amount: -3000,
-    at: "2026-03-29 01:10 UTC",
-    note: "Moved into earning pool",
-  },
-];
+export default function WalletPage() {
+  const [state, setState] = useState<SimulationState>(demoState);
 
-export default async function WalletPage() {
-  const state = await getSimulationState();
+  useEffect(() => {
+    const auth = getStoredAuth();
+    const load = auth ? fetchSimulationState() : fetchDemoState();
+    load.then(setState).catch(() => setState(demoState));
+  }, []);
 
   return (
     <AppShell title="Wallet" subtitle="Internal custody ledger">
@@ -40,32 +32,70 @@ export default async function WalletPage() {
       </section>
 
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
-        <h2 className="text-lg font-medium">Ledger activity</h2>
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[600px] text-left text-sm">
-            <thead className="text-slate-400">
-              <tr>
-                <th className="pb-2">Time</th>
-                <th className="pb-2">Type</th>
-                <th className="pb-2">Asset</th>
-                <th className="pb-2">Amount</th>
-                <th className="pb-2">Note</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((item) => (
-                <tr key={item.id} className="border-t border-slate-800">
-                  <td className="py-2">{item.at}</td>
-                  <td className="py-2 uppercase">{item.type}</td>
-                  <td className="py-2">{item.asset}</td>
-                  <td className="py-2">{formatAsset(item.amount, 2)}</td>
-                  <td className="py-2 text-slate-400">{item.note}</td>
+        <h2 className="text-lg font-medium">Recent trades</h2>
+        {state.trades.length === 0 ? (
+          <p className="mt-4 text-sm text-slate-400">No trades yet.</p>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[600px] text-left text-sm">
+              <thead className="text-slate-400">
+                <tr>
+                  <th className="pb-2">Time</th>
+                  <th className="pb-2">Pair</th>
+                  <th className="pb-2">Side</th>
+                  <th className="pb-2">Quantity</th>
+                  <th className="pb-2">Price</th>
+                  <th className="pb-2">Fee</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {state.trades.map((trade) => (
+                  <tr key={trade.id} className="border-t border-slate-800">
+                    <td className="py-2">{new Date(trade.created_at).toLocaleString()}</td>
+                    <td className="py-2">{trade.pair}</td>
+                    <td className={`py-2 font-medium ${trade.side === "buy" ? "text-emerald-400" : "text-rose-400"}`}>
+                      {trade.side.toUpperCase()}
+                    </td>
+                    <td className="py-2">{formatAsset(trade.quantity, 6)}</td>
+                    <td className="py-2">{formatCurrency(trade.price)}</td>
+                    <td className="py-2 text-slate-400">{formatCurrency(trade.fee)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
+
+      {state.yieldPositions.length > 0 && (
+        <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+          <h2 className="text-lg font-medium">Earn positions</h2>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[500px] text-left text-sm">
+              <thead className="text-slate-400">
+                <tr>
+                  <th className="pb-2">Started</th>
+                  <th className="pb-2">Amount (USDT)</th>
+                  <th className="pb-2">APY</th>
+                  <th className="pb-2">Accrued</th>
+                  <th className="pb-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.yieldPositions.map((pos) => (
+                  <tr key={pos.id} className="border-t border-slate-800">
+                    <td className="py-2">{new Date(pos.started_at).toLocaleDateString()}</td>
+                    <td className="py-2">{formatCurrency(pos.amount)}</td>
+                    <td className="py-2">{pos.apy}%</td>
+                    <td className="py-2 text-emerald-400">+{formatCurrency(pos.accrued_profit)}</td>
+                    <td className="py-2 capitalize">{pos.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </AppShell>
   );
 }

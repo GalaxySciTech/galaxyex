@@ -81,3 +81,7 @@ export async function ensureDemoUser() {
 
   return registerUser(email, "demo1234", "user");
 }
+
+export async function getDemoUser() {
+  return UserModel.findOne({ email: "demo@galaxyex.io" });
+}
