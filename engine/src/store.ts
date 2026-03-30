@@ -1,55 +1,98 @@
 import { randomUUID } from "node:crypto";
 import {
-  Asset,
-  PlatformConfig,
-  Trade,
-  TradeSide,
-  TradingPair,
-  UserSimulationState,
-  YieldPosition,
-} from "./types.js";
+  BalanceModel,
+  PlatformConfigModel,
+  TradeModel,
+  YieldPositionModel,
+} from "./models.js";
+import type { Asset, PlatformConfig, Trade, TradeSide, TradingPair, YieldPosition } from "./types.js";
 
 type Prices = Record<TradingPair, number>;
-
-const userId = "demo-user-1";
-
-const state: UserSimulationState = {
-  userId,
-  balances: {
-    USDT: { asset: "USDT", available: 12000, inEarn: 0 },
-    BTC: { asset: "BTC", available: 0.15, inEarn: 0 },
-    ETH: { asset: "ETH", available: 2.5, inEarn: 0 },
-  },
-  trades: [],
-  yieldPositions: [],
-};
-
-const config: PlatformConfig = {
-  apy: 12,
-  tradingFeeBps: 8,
-  spreadBps: 18,
-  bot: {
-    enabled: true,
-    tradesPerMinute: 6,
-    maxOrderNotional: 1200,
-  },
-};
 
 let prices: Prices = {
   "BTC/USDT": 65000,
   "ETH/USDT": 3400,
 };
 
-export function getState(targetUserId = userId) {
-  if (targetUserId !== userId) {
-    return null;
+export function setPrices(nextPrices: Partial<Prices>) {
+  prices = { ...prices, ...nextPrices };
+}
+
+export function getCurrentPrices() {
+  return prices;
+}
+
+async function getConfig(): Promise<PlatformConfig> {
+  let doc = await PlatformConfigModel.findOne({ key: "global" });
+  if (!doc) {
+    doc = await PlatformConfigModel.create({ key: "global" });
   }
+  return {
+    apy: doc.apy,
+    tradingFeeBps: doc.tradingFeeBps,
+    spreadBps: doc.spreadBps,
+    bot: {
+      enabled: doc.bot.enabled,
+      tradesPerMinute: doc.bot.tradesPerMinute,
+      maxOrderNotional: doc.bot.maxOrderNotional,
+    },
+  };
+}
+
+async function ensureBalances(userId: string) {
+  const defaults: Array<{ asset: Asset; available: number; inEarn: number }> = [
+    { asset: "USDT", available: 12000, inEarn: 0 },
+    { asset: "BTC", available: 0.15, inEarn: 0 },
+    { asset: "ETH", available: 2.5, inEarn: 0 },
+  ];
+
+  for (const d of defaults) {
+    await BalanceModel.findOneAndUpdate(
+      { userId, asset: d.asset },
+      { $setOnInsert: { userId, asset: d.asset, available: d.available, inEarn: d.inEarn } },
+      { upsert: true, new: false },
+    );
+  }
+}
+
+export async function getState(userId: string) {
+  await ensureBalances(userId);
+
+  const [balanceDocs, tradeDocs, yieldDocs, config] = await Promise.all([
+    BalanceModel.find({ userId }),
+    TradeModel.find({ userId }).sort({ createdAt: -1 }).limit(25),
+    YieldPositionModel.find({ userId }),
+    getConfig(),
+  ]);
 
   return {
     userId,
-    balances: Object.values(state.balances),
-    trades: state.trades.slice(0, 25),
-    yieldPositions: state.yieldPositions,
+    balances: balanceDocs.map((b) => ({
+      asset: b.asset,
+      available: b.available,
+      inEarn: b.inEarn,
+    })),
+    trades: tradeDocs.map((t) => ({
+      id: t.tradeId,
+      userId: t.userId,
+      pair: t.pair,
+      side: t.side,
+      quantity: t.quantity,
+      price: t.price,
+      fee: t.fee,
+      status: t.status,
+      createdAt: t.createdAt,
+    })),
+    yieldPositions: yieldDocs.map((y) => ({
+      id: y.positionId,
+      userId: y.userId,
+      amount: y.amount,
+      apy: y.apy,
+      accruedProfit: y.accruedProfit,
+      startedAt: y.startedAt,
+      lastAccruedAt: y.lastAccruedAt,
+      status: y.status,
+    })),
     apy: config.apy,
     tradingFeeBps: config.tradingFeeBps,
     spreadBps: config.spreadBps,
@@ -62,47 +105,49 @@ export function getState(targetUserId = userId) {
   };
 }
 
-export function setPrices(nextPrices: Partial<Prices>) {
-  prices = {
-    ...prices,
-    ...nextPrices,
-  };
-}
-
-function quotePrice(pair: TradingPair, side: TradeSide) {
+function quotePrice(pair: TradingPair, side: TradeSide, spreadBps: number) {
   const mid = prices[pair];
-  const spread = config.spreadBps / 10_000;
+  const spread = spreadBps / 10_000;
   return side === "buy" ? mid * (1 + spread / 2) : mid * (1 - spread / 2);
 }
 
-export function simulateTrade(input: {
+export async function simulateTrade(input: {
+  userId: string;
   pair: TradingPair;
   side: TradeSide;
   quantity: number;
-}) {
-  const { pair, side, quantity } = input;
+}): Promise<Trade> {
+  const { userId, pair, side, quantity } = input;
+  const config = await getConfig();
   const base = pair.split("/")[0] as Exclude<Asset, "USDT">;
-  const executionPrice = quotePrice(pair, side);
+  const executionPrice = quotePrice(pair, side, config.spreadBps);
   const notional = quantity * executionPrice;
   const fee = (notional * config.tradingFeeBps) / 10_000;
 
+  await ensureBalances(userId);
+
   if (side === "buy") {
     const required = notional + fee;
-    if (state.balances.USDT.available < required) {
+    const usdtBal = await BalanceModel.findOne({ userId, asset: "USDT" });
+    if (!usdtBal || usdtBal.available < required) {
       throw new Error("Insufficient USDT for trade.");
     }
-    state.balances.USDT.available -= required;
-    state.balances[base].available += quantity;
+    await BalanceModel.updateOne({ userId, asset: "USDT" }, { $inc: { available: -required } });
+    await BalanceModel.updateOne({ userId, asset: base }, { $inc: { available: quantity } });
   } else {
-    if (state.balances[base].available < quantity) {
+    const baseBal = await BalanceModel.findOne({ userId, asset: base });
+    if (!baseBal || baseBal.available < quantity) {
       throw new Error(`Insufficient ${base} for trade.`);
     }
-    state.balances[base].available -= quantity;
-    state.balances.USDT.available += notional - fee;
+    await BalanceModel.updateOne({ userId, asset: base }, { $inc: { available: -quantity } });
+    await BalanceModel.updateOne({ userId, asset: "USDT" }, { $inc: { available: notional - fee } });
   }
 
-  const trade: Trade = {
-    id: randomUUID(),
+  const tradeId = randomUUID();
+  await TradeModel.create({ tradeId, userId, pair, side, quantity, price: executionPrice, fee, status: "filled" });
+
+  return {
+    id: tradeId,
     userId,
     pair,
     side,
@@ -112,26 +157,27 @@ export function simulateTrade(input: {
     status: "filled",
     createdAt: new Date().toISOString(),
   };
-
-  state.trades.unshift(trade);
-  return trade;
 }
 
-export function openYieldPosition(amount: number) {
+export async function openYieldPosition(userId: string, amount: number): Promise<YieldPosition> {
   if (amount <= 0) {
     throw new Error("Amount must be greater than zero.");
   }
 
-  if (state.balances.USDT.available < amount) {
+  await ensureBalances(userId);
+  const config = await getConfig();
+
+  const usdtBal = await BalanceModel.findOne({ userId, asset: "USDT" });
+  if (!usdtBal || usdtBal.available < amount) {
     throw new Error("Insufficient USDT balance for earn position.");
   }
 
-  state.balances.USDT.available -= amount;
-  state.balances.USDT.inEarn += amount;
+  await BalanceModel.updateOne({ userId, asset: "USDT" }, { $inc: { available: -amount, inEarn: amount } });
 
-  const now = new Date().toISOString();
-  const position: YieldPosition = {
-    id: randomUUID(),
+  const positionId = randomUUID();
+  const now = new Date();
+  await YieldPositionModel.create({
+    positionId,
     userId,
     amount,
     apy: config.apy,
@@ -139,87 +185,111 @@ export function openYieldPosition(amount: number) {
     startedAt: now,
     lastAccruedAt: now,
     status: "active",
-  };
+  });
 
-  state.yieldPositions.push(position);
-  return position;
+  return {
+    id: positionId,
+    userId,
+    amount,
+    apy: config.apy,
+    accruedProfit: 0,
+    startedAt: now.toISOString(),
+    lastAccruedAt: now.toISOString(),
+    status: "active",
+  };
 }
 
-export function accrueYield(days = 1) {
-  const updates = state.yieldPositions
-    .filter((position) => position.status === "active")
-    .map((position) => {
-      const ratePerDay = position.apy / 100 / 365;
-      const reward = position.amount * ratePerDay * days;
-      position.accruedProfit += reward;
-      position.lastAccruedAt = new Date().toISOString();
-      return {
-        id: position.id,
-        reward,
-      };
-    });
+export async function accrueYield(days = 1) {
+  const positions = await YieldPositionModel.find({ status: "active" });
+  const updates: Array<{ id: string; reward: number }> = [];
+
+  for (const position of positions) {
+    const ratePerDay = position.apy / 100 / 365;
+    const reward = position.amount * ratePerDay * days;
+    await YieldPositionModel.updateOne(
+      { positionId: position.positionId },
+      { $inc: { accruedProfit: reward }, $set: { lastAccruedAt: new Date() } },
+    );
+    updates.push({ id: position.positionId, reward });
+  }
 
   return updates;
 }
 
-type PlatformConfigUpdate = Partial<Omit<PlatformConfig, "bot">> & {
-  bot?: Partial<PlatformConfig["bot"]>;
-};
-
-export function updateConfig(next: PlatformConfigUpdate) {
-  if (typeof next.apy === "number") {
-    config.apy = next.apy;
-  }
-  if (typeof next.spreadBps === "number") {
-    config.spreadBps = next.spreadBps;
-  }
-  if (typeof next.tradingFeeBps === "number") {
-    config.tradingFeeBps = next.tradingFeeBps;
-  }
+export async function updateConfig(next: {
+  apy?: number;
+  spreadBps?: number;
+  tradingFeeBps?: number;
+  bot?: { enabled?: boolean; tradesPerMinute?: number; maxOrderNotional?: number };
+}) {
+  const update: Record<string, unknown> = {};
+  if (typeof next.apy === "number") update["apy"] = next.apy;
+  if (typeof next.spreadBps === "number") update["spreadBps"] = next.spreadBps;
+  if (typeof next.tradingFeeBps === "number") update["tradingFeeBps"] = next.tradingFeeBps;
   if (next.bot) {
-    config.bot = {
-      ...config.bot,
-      ...next.bot,
-    };
+    if (typeof next.bot.enabled === "boolean") update["bot.enabled"] = next.bot.enabled;
+    if (typeof next.bot.tradesPerMinute === "number") update["bot.tradesPerMinute"] = next.bot.tradesPerMinute;
+    if (typeof next.bot.maxOrderNotional === "number") update["bot.maxOrderNotional"] = next.bot.maxOrderNotional;
   }
 
-  return config;
+  const doc = await PlatformConfigModel.findOneAndUpdate(
+    { key: "global" },
+    { $set: update },
+    { upsert: true, new: true },
+  );
+
+  return doc;
 }
 
-export function adjustBalance(asset: Asset, delta: number) {
-  state.balances[asset].available += delta;
-  return state.balances[asset];
+export async function adjustBalance(userId: string, asset: Asset, delta: number) {
+  await ensureBalances(userId);
+  const doc = await BalanceModel.findOneAndUpdate(
+    { userId, asset },
+    { $inc: { available: delta } },
+    { new: true },
+  );
+  return doc;
 }
 
-export function generateBotTrades() {
-  if (!config.bot.enabled) {
-    return [];
-  }
+export async function generateBotTrades() {
+  const config = await getConfig();
+  if (!config.bot.enabled) return [];
 
   const trades: Trade[] = [];
   const count = Math.max(1, Math.min(config.bot.tradesPerMinute, 30));
   const pairs: TradingPair[] = ["BTC/USDT", "ETH/USDT"];
 
-  for (let i = 0; i < count; i += 1) {
+  for (let i = 0; i < count; i++) {
     const pair = pairs[Math.floor(Math.random() * pairs.length)];
     const side: TradeSide = Math.random() > 0.5 ? "buy" : "sell";
     const px = prices[pair];
     const maxQty = config.bot.maxOrderNotional / px;
     const qty = Number((Math.random() * maxQty).toFixed(6));
+    const tradeId = randomUUID();
+    const botUserId = "bot-liquidity";
 
-    const trade: Trade = {
-      id: randomUUID(),
-      userId: "bot-liquidity",
+    await TradeModel.create({
+      tradeId,
+      userId: botUserId,
       pair,
       side,
       quantity: qty,
-      price: quotePrice(pair, side),
+      price: quotePrice(pair, side, config.spreadBps),
+      fee: 0,
+      status: "filled",
+    });
+
+    trades.push({
+      id: tradeId,
+      userId: botUserId,
+      pair,
+      side,
+      quantity: qty,
+      price: quotePrice(pair, side, config.spreadBps),
       fee: 0,
       status: "filled",
       createdAt: new Date().toISOString(),
-    };
-
-    trades.push(trade);
+    });
   }
 
   return trades;

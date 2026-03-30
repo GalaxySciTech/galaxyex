@@ -1,6 +1,6 @@
 import { AppShell } from "@/components/app-shell";
-import { demoState } from "@/lib/mock-data";
 import { formatAsset } from "@/lib/format";
+import { getSimulationState } from "@/lib/sim-client";
 
 const history = [
   {
@@ -21,13 +21,15 @@ const history = [
   },
 ];
 
-export default function WalletPage() {
+export default async function WalletPage() {
+  const state = await getSimulationState();
+
   return (
     <AppShell title="Wallet" subtitle="Internal custody ledger">
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-5">
         <h2 className="text-lg font-medium">Balances</h2>
         <div className="mt-4 grid gap-3 md:grid-cols-3">
-          {demoState.balances.map((balance) => (
+          {state.balances.map((balance) => (
             <div key={balance.id} className="rounded-lg border border-slate-700 bg-slate-950 p-4">
               <p className="text-sm text-slate-400">{balance.asset}</p>
               <p className="mt-1 text-lg font-semibold">{formatAsset(balance.available)}</p>

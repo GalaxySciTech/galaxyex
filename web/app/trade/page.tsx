@@ -1,41 +1,68 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { demoState } from "@/lib/mock-data";
 import { formatAsset, formatCurrency } from "@/lib/format";
-import type { TradingPair } from "@/lib/types";
+import type { SimulationState, TradingPair } from "@/lib/types";
+import { executeTrade, fetchDemoState, getStoredAuth, fetchSimulationState } from "@/lib/api-client";
 
 const pairs: TradingPair[] = ["BTC/USDT", "ETH/USDT"];
 
 export default function TradePage() {
+  const [state, setState] = useState<SimulationState>(demoState);
   const [pair, setPair] = useState<TradingPair>("BTC/USDT");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [quantity, setQuantity] = useState("0.01");
   const [result, setResult] = useState<string>("");
+  const [loading, setLoading] = useState(false);
 
-  const mid = demoState.prices[pair];
-  const spread = demoState.spreadBps / 10_000;
+  useEffect(() => {
+    const auth = getStoredAuth();
+    const load = auth ? fetchSimulationState() : fetchDemoState();
+    load.then(setState).catch(() => setState(demoState));
+  }, []);
+
+  const mid = state.prices[pair];
+  const spread = state.spreadBps / 10_000;
 
   const executionPrice = useMemo(() => {
-    if (side === "buy") {
-      return mid * (1 + spread / 2);
-    }
+    if (side === "buy") return mid * (1 + spread / 2);
     return mid * (1 - spread / 2);
   }, [mid, side, spread]);
 
   const notional = Number(quantity || 0) * executionPrice;
-  const fee = (notional * demoState.tradingFeeBps) / 10_000;
+  const fee = (notional * state.tradingFeeBps) / 10_000;
 
-  const submitTrade = () => {
+  const submitTrade = async () => {
     if (!quantity || Number(quantity) <= 0) {
       setResult("Enter a valid quantity.");
       return;
     }
 
-    setResult(
-      `Simulated ${side.toUpperCase()} ${formatAsset(Number(quantity), 6)} ${pair.split("/")[0]} at ${formatCurrency(executionPrice)}. Fee: ${formatCurrency(fee)}.`,
-    );
+    const auth = getStoredAuth();
+    if (!auth) {
+      setResult(
+        `Simulated ${side.toUpperCase()} ${formatAsset(Number(quantity), 6)} ${pair.split("/")[0]} at ${formatCurrency(executionPrice)}. Fee: ${formatCurrency(fee)}.`,
+      );
+      return;
+    }
+
+    setLoading(true);
+    setResult("");
+    try {
+      const { trade } = await executeTrade(pair, side, Number(quantity));
+      setResult(
+        `${side.toUpperCase()} ${formatAsset(trade.quantity, 6)} ${pair.split("/")[0]} at ${formatCurrency(trade.price)}. Fee: ${formatCurrency(trade.fee)}. ✓`,
+      );
+      // Refresh state
+      const updated = await fetchSimulationState();
+      setState(updated);
+    } catch (error) {
+      setResult(`Error: ${(error as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -85,9 +112,10 @@ export default function TradePage() {
 
             <button
               onClick={submitTrade}
-              className="rounded-md bg-emerald-500 px-3 py-2 text-sm font-semibold text-black"
+              disabled={loading}
+              className="rounded-md bg-emerald-500 px-3 py-2 text-sm font-semibold text-black disabled:opacity-60"
             >
-              Execute simulated trade
+              {loading ? "Executing…" : "Execute trade"}
             </button>
 
             {result ? (
@@ -105,7 +133,7 @@ export default function TradePage() {
             <Row label="Execution Price" value={formatCurrency(executionPrice)} />
             <Row label="Notional" value={formatCurrency(notional)} />
             <Row label="Trading Fee" value={formatCurrency(fee)} />
-            <Row label="Spread" value={`${demoState.spreadBps} bps`} />
+            <Row label="Spread" value={`${state.spreadBps} bps`} />
           </dl>
         </div>
       </section>
