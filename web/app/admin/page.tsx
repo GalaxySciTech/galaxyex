@@ -1,22 +1,71 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { demoState } from "@/lib/mock-data";
+import type { SimulationState } from "@/lib/types";
+import { fetchDemoState, fetchSimulationState, getStoredAuth, saveAdminConfig } from "@/lib/api-client";
 
 export default function AdminPage() {
+  const [state, setState] = useState<SimulationState>(demoState);
   const [apy, setApy] = useState(String(demoState.apy));
   const [spread, setSpread] = useState(String(demoState.spreadBps));
   const [fee, setFee] = useState(String(demoState.tradingFeeBps));
   const [botEnabled, setBotEnabled] = useState(demoState.botConfig.enabled);
   const [botTrades, setBotTrades] = useState(String(demoState.botConfig.trades_per_minute));
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const auth = getStoredAuth();
+    const load = auth ? fetchSimulationState() : fetchDemoState();
+    load
+      .then((s) => {
+        setState(s);
+        setApy(String(s.apy));
+        setSpread(String(s.spreadBps));
+        setFee(String(s.tradingFeeBps));
+        setBotEnabled(s.botConfig.enabled);
+        setBotTrades(String(s.botConfig.trades_per_minute));
+      })
+      .catch(() => setState(demoState));
+  }, []);
 
   const summary = useMemo(
-    () =>
-      `APY ${apy}% | spread ${spread} bps | fee ${fee} bps | bot ${botEnabled ? "ON" : "OFF"} @ ${botTrades} tpm`,
+    () => `APY ${apy}% | spread ${spread} bps | fee ${fee} bps | bot ${botEnabled ? "ON" : "OFF"} @ ${botTrades} tpm`,
     [apy, spread, fee, botEnabled, botTrades],
   );
+
+  const save = async () => {
+    const auth = getStoredAuth();
+    if (!auth) {
+      setMessage(`Saved config (mock): ${summary}`);
+      return;
+    }
+    if (auth.role !== "admin") {
+      setMessage("Admin access required.");
+      return;
+    }
+
+    setLoading(true);
+    setMessage("");
+    try {
+      await saveAdminConfig({
+        apy: Number(apy),
+        spreadBps: Number(spread),
+        tradingFeeBps: Number(fee),
+        bot: {
+          enabled: botEnabled,
+          tradesPerMinute: Number(botTrades),
+        },
+      });
+      setMessage(`Config saved: ${summary} ✓`);
+    } catch (error) {
+      setMessage(`Error: ${(error as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <AppShell title="Admin" subtitle="Risk and growth controls">
@@ -40,10 +89,11 @@ export default function AdminPage() {
             </label>
 
             <button
-              onClick={() => setMessage(`Saved config: ${summary}`)}
-              className="mt-2 rounded-md bg-emerald-500 px-4 py-2 text-sm font-semibold text-black"
+              onClick={save}
+              disabled={loading}
+              className="mt-2 rounded-md bg-emerald-500 px-4 py-2 text-sm font-semibold text-black disabled:opacity-60"
             >
-              Save config (mock)
+              {loading ? "Saving…" : "Save config"}
             </button>
 
             {message ? (
@@ -61,6 +111,7 @@ export default function AdminPage() {
             <li>- Spread can be widened during high volatility windows.</li>
             <li>- Bot cadence should avoid repetitive fixed-size patterns.</li>
             <li>- Manual balance adjustments require audit trail in DB.</li>
+            <li>- Admin endpoints require a JWT with role=admin.</li>
           </ul>
         </div>
       </section>

@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: galaxyex
+
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/galaxyex
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
+      PORT: 8080
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    depends_on:
+      - mongodb
+
+volumes:
+  mongo_data:
