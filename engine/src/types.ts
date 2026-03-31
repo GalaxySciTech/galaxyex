@@ -1,5 +1,5 @@
-export type Asset = "USDT" | "BTC" | "ETH";
-export type TradingPair = "BTC/USDT" | "ETH/USDT";
+export type Asset = "USDT" | "BTC" | "ETH" | "SOL" | "BNB";
+export type TradingPair = "BTC/USDT" | "ETH/USDT" | "SOL/USDT" | "BNB/USDT";
 export type TradeSide = "buy" | "sell";
 
 export type Balance = {
@@ -37,6 +37,16 @@ export type BotConfig = {
   maxOrderNotional: number;
 };
 
+export type PriceStats = {
+  pair: TradingPair;
+  price: number;
+  open24h: number;
+  high24h: number;
+  low24h: number;
+  volume24h: number;
+  changePercent24h: number;
+};
+
 export type UserSimulationState = {
   userId: string;
   balances: Record<Asset, Balance>;
@@ -49,4 +59,29 @@ export type PlatformConfig = {
   tradingFeeBps: number;
   spreadBps: number;
   bot: BotConfig;
+};
+
+export type EarnProduct = {
+  id: string;
+  name: string;
+  asset: Asset;
+  apy: number;
+  minAmount: number;
+  maxAmount: number;
+  durationDays: number;
+  flexible: boolean;
+};
+
+export type OrderType = "market" | "limit";
+
+export type Order = {
+  id: string;
+  userId: string;
+  pair: TradingPair;
+  side: TradeSide;
+  type: OrderType;
+  quantity: number;
+  limitPrice?: number;
+  status: "open" | "filled" | "cancelled";
+  createdAt: string;
 };

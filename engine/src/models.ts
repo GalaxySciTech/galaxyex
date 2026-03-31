@@ -1,5 +1,5 @@
 import mongoose, { Schema, Document } from "mongoose";
-import type { Asset, TradingPair, TradeSide } from "./types.js";
+import type { Asset, TradingPair, TradeSide, OrderType } from "./types.js";
 
 // ── User ──────────────────────────────────────────────────────────────────────
 
@@ -32,7 +32,7 @@ export interface IBalance extends Document {
 
 const balanceSchema = new Schema<IBalance>({
   userId: { type: String, required: true, index: true },
-  asset: { type: String, enum: ["USDT", "BTC", "ETH"], required: true },
+  asset: { type: String, enum: ["USDT", "BTC", "ETH", "SOL", "BNB"], required: true },
   available: { type: Number, default: 0 },
   inEarn: { type: Number, default: 0 },
 });
@@ -59,7 +59,7 @@ const tradeSchema = new Schema<ITrade>(
   {
     tradeId: { type: String, required: true, unique: true },
     userId: { type: String, required: true, index: true },
-    pair: { type: String, enum: ["BTC/USDT", "ETH/USDT"], required: true },
+    pair: { type: String, enum: ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"], required: true },
     side: { type: String, enum: ["buy", "sell"], required: true },
     quantity: { type: Number, required: true },
     price: { type: Number, required: true },
@@ -71,6 +71,36 @@ const tradeSchema = new Schema<ITrade>(
 
 export const TradeModel = mongoose.model<ITrade>("Trade", tradeSchema);
 
+// ── Open Limit Order ──────────────────────────────────────────────────────────
+
+export interface ILimitOrder extends Document {
+  orderId: string;
+  userId: string;
+  pair: TradingPair;
+  side: TradeSide;
+  quantity: number;
+  limitPrice: number;
+  filledQuantity: number;
+  status: "open" | "filled" | "cancelled";
+  createdAt: Date;
+}
+
+const limitOrderSchema = new Schema<ILimitOrder>(
+  {
+    orderId: { type: String, required: true, unique: true },
+    userId: { type: String, required: true, index: true },
+    pair: { type: String, enum: ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"], required: true },
+    side: { type: String, enum: ["buy", "sell"], required: true },
+    quantity: { type: Number, required: true },
+    limitPrice: { type: Number, required: true },
+    filledQuantity: { type: Number, default: 0 },
+    status: { type: String, enum: ["open", "filled", "cancelled"], default: "open" },
+  },
+  { timestamps: true },
+);
+
+export const LimitOrderModel = mongoose.model<ILimitOrder>("LimitOrder", limitOrderSchema);
+
 // ── YieldPosition ─────────────────────────────────────────────────────────────
 
 export interface IYieldPosition extends Document {
@@ -81,7 +111,11 @@ export interface IYieldPosition extends Document {
   accruedProfit: number;
   startedAt: Date;
   lastAccruedAt: Date;
+  redeemedAt?: Date;
   status: "active" | "closed";
+  productName: string;
+  durationDays: number;
+  flexible: boolean;
 }
 
 const yieldPositionSchema = new Schema<IYieldPosition>({
@@ -92,7 +126,11 @@ const yieldPositionSchema = new Schema<IYieldPosition>({
   accruedProfit: { type: Number, default: 0 },
   startedAt: { type: Date, default: Date.now },
   lastAccruedAt: { type: Date, default: Date.now },
+  redeemedAt: { type: Date },
   status: { type: String, enum: ["active", "closed"], default: "active" },
+  productName: { type: String, default: "Flexible Savings" },
+  durationDays: { type: Number, default: 0 },
+  flexible: { type: Boolean, default: true },
 });
 
 export const YieldPositionModel = mongoose.model<IYieldPosition>("YieldPosition", yieldPositionSchema);
