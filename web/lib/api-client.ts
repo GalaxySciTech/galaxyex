@@ -297,6 +297,65 @@ export async function cancelOrder(orderId: string): Promise<{ orderId: string; s
   return request(`/api/orders/${orderId}`, { method: "DELETE" });
 }
 
+// ── Klines, Order Book, Recent Trades ─────────────────────────────────────────
+
+export type KlineInterval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d" | "1w";
+
+export type Kline = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
+export type OrderBookEntry = {
+  price: number;
+  quantity: number;
+};
+
+export type RecentMarketTrade = {
+  id: number;
+  price: number;
+  qty: number;
+  time: number;
+  isBuyerMaker: boolean;
+};
+
+export async function fetchKlines(
+  pair: string,
+  interval: KlineInterval = "1h",
+  limit = 200,
+): Promise<Kline[]> {
+  const p = pair.replace("/", "-");
+  const data = await request<{ klines: Kline[] }>(
+    `/api/klines/${p}?interval=${interval}&limit=${limit}`,
+  );
+  return data.klines;
+}
+
+export async function fetchOrderBook(
+  pair: string,
+  limit = 20,
+): Promise<{ bids: OrderBookEntry[]; asks: OrderBookEntry[] }> {
+  const p = pair.replace("/", "-");
+  return request<{ bids: OrderBookEntry[]; asks: OrderBookEntry[] }>(
+    `/api/depth/${p}?limit=${limit}`,
+  );
+}
+
+export async function fetchRecentTrades(
+  pair: string,
+  limit = 50,
+): Promise<RecentMarketTrade[]> {
+  const p = pair.replace("/", "-");
+  const data = await request<{ trades: RecentMarketTrade[] }>(
+    `/api/trades/${p}?limit=${limit}`,
+  );
+  return data.trades;
+}
+
 // ── Earn ──────────────────────────────────────────────────────────────────────
 
 export interface EarnResult {

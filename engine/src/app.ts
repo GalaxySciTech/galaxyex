@@ -16,7 +16,15 @@ import {
   simulateTrade,
   updateConfig,
 } from "./store.js";
-import { getMarketPrices, getMarketStats as fetchMarketStats } from "./price-feed.js";
+import {
+  getMarketPrices,
+  getMarketStats as fetchMarketStats,
+  getKlines,
+  getOrderBook,
+  getRecentTrades,
+  SYMBOL_MAP,
+  type KlineInterval,
+} from "./price-feed.js";
 import {
   getDemoUser,
   requireAdmin,
@@ -100,6 +108,49 @@ app.get("/api/markets/:pair", (req, res) => {
     return;
   }
   res.json(stat);
+});
+
+// ── Klines, Order Book, Recent Trades ─────────────────────────────────────────
+
+const VALID_INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d", "1w"];
+const VALID_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"];
+
+app.get("/api/klines/:pair", async (req, res) => {
+  const pair = String(req.params.pair).replace("-", "/");
+  if (!VALID_PAIRS.includes(pair)) {
+    res.status(400).json({ message: "Invalid pair." });
+    return;
+  }
+  const interval = (String(req.query.interval ?? "1h")) as KlineInterval;
+  if (!VALID_INTERVALS.includes(interval)) {
+    res.status(400).json({ message: "Invalid interval." });
+    return;
+  }
+  const limit = Math.min(Number(req.query.limit ?? 200), 1000);
+  const klines = await getKlines(pair as typeof VALID_PAIRS[number] & string as import("./types.js").TradingPair, interval, limit);
+  res.json({ pair, interval, klines });
+});
+
+app.get("/api/depth/:pair", async (req, res) => {
+  const pair = String(req.params.pair).replace("-", "/");
+  if (!VALID_PAIRS.includes(pair)) {
+    res.status(400).json({ message: "Invalid pair." });
+    return;
+  }
+  const limit = Math.min(Number(req.query.limit ?? 20), 100);
+  const depth = await getOrderBook(pair as import("./types.js").TradingPair, limit);
+  res.json({ pair, ...depth });
+});
+
+app.get("/api/trades/:pair", async (req, res) => {
+  const pair = String(req.params.pair).replace("-", "/");
+  if (!VALID_PAIRS.includes(pair)) {
+    res.status(400).json({ message: "Invalid pair." });
+    return;
+  }
+  const limit = Math.min(Number(req.query.limit ?? 50), 100);
+  const trades = await getRecentTrades(pair as import("./types.js").TradingPair, limit);
+  res.json({ pair, trades });
 });
 
 // ── Simulation state ──────────────────────────────────────────────────────────

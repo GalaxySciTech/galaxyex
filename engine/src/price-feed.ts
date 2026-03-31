@@ -14,7 +14,7 @@ const FALLBACK_STATS: Record<TradingPair, PriceStats> = {
   "BNB/USDT": { pair: "BNB/USDT", price: 580, open24h: 571, high24h: 588, low24h: 568, volume24h: 1250000000, changePercent24h: 1.58 },
 };
 
-const SYMBOL_MAP: Record<TradingPair, string> = {
+export const SYMBOL_MAP: Record<TradingPair, string> = {
   "BTC/USDT": "BTCUSDT",
   "ETH/USDT": "ETHUSDT",
   "SOL/USDT": "SOLUSDT",
@@ -22,6 +22,115 @@ const SYMBOL_MAP: Record<TradingPair, string> = {
 };
 
 const PAIRS: TradingPair[] = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"];
+
+export type KlineInterval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d" | "1w";
+
+export type Kline = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
+export type OrderBookEntry = {
+  price: number;
+  quantity: number;
+};
+
+export type OrderBookData = {
+  bids: OrderBookEntry[];
+  asks: OrderBookEntry[];
+};
+
+export type RecentTrade = {
+  id: number;
+  price: number;
+  qty: number;
+  time: number;
+  isBuyerMaker: boolean;
+};
+
+export async function getKlines(
+  pair: TradingPair,
+  interval: KlineInterval = "1h",
+  limit = 200,
+): Promise<Kline[]> {
+  try {
+    const symbol = SYMBOL_MAP[pair];
+    if (!symbol) return [];
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return [];
+
+    const data = (await res.json()) as Array<
+      [number, string, string, string, string, string, number, string, number, string, string, string]
+    >;
+
+    return data.map((k) => ({
+      time: k[0],
+      open: Number(k[1]),
+      high: Number(k[2]),
+      low: Number(k[3]),
+      close: Number(k[4]),
+      volume: Number(k[5]),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function getOrderBook(pair: TradingPair, limit = 20): Promise<OrderBookData> {
+  const empty: OrderBookData = { bids: [], asks: [] };
+  try {
+    const symbol = SYMBOL_MAP[pair];
+    if (!symbol) return empty;
+    const url = `https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${limit}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return empty;
+
+    const data = (await res.json()) as {
+      bids: [string, string][];
+      asks: [string, string][];
+    };
+
+    return {
+      bids: data.bids.map(([p, q]) => ({ price: Number(p), quantity: Number(q) })),
+      asks: data.asks.map(([p, q]) => ({ price: Number(p), quantity: Number(q) })),
+    };
+  } catch {
+    return empty;
+  }
+}
+
+export async function getRecentTrades(pair: TradingPair, limit = 50): Promise<RecentTrade[]> {
+  try {
+    const symbol = SYMBOL_MAP[pair];
+    if (!symbol) return [];
+    const url = `https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=${limit}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return [];
+
+    const data = (await res.json()) as Array<{
+      id: number;
+      price: string;
+      qty: string;
+      time: number;
+      isBuyerMaker: boolean;
+    }>;
+
+    return data.map((t) => ({
+      id: t.id,
+      price: Number(t.price),
+      qty: Number(t.qty),
+      time: t.time,
+      isBuyerMaker: t.isBuyerMaker,
+    }));
+  } catch {
+    return [];
+  }
+}
 
 export async function getMarketPrices(): Promise<Record<TradingPair, number>> {
   try {
