@@ -89,6 +89,7 @@ npm run build
 npm start
 ```
 
+
 ### 使用 PM2 部署后端（推荐生产方式）
 
 [PM2](https://pm2.keymetrics.io/) 是 Node.js 进程管理器，支持自动重启、日志管理和开机自启。
@@ -124,7 +125,6 @@ pm2 delete galaxyex-engine    # 删除进程
 pm2 save                      # 保存当前进程列表
 pm2 startup                   # 设置开机自启
 ```
-
 ### 默认账号
 
 系统启动后会自动创建演示账号：
