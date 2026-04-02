@@ -89,6 +89,42 @@ npm run build
 npm start
 ```
 
+### 使用 PM2 部署后端（推荐生产方式）
+
+[PM2](https://pm2.keymetrics.io/) 是 Node.js 进程管理器，支持自动重启、日志管理和开机自启。
+
+```bash
+# 安装 PM2（全局）
+npm install -g pm2
+
+# 进入后端目录，安装依赖并构建
+cd engine
+npm ci
+npm run build
+
+# 确保 .env 已配置
+cp .env.example .env    # 编辑 .env，填入 MONGODB_URI 和 JWT_SECRET
+
+# 使用 ecosystem 配置启动
+pm2 start ecosystem.config.cjs
+
+# 或者直接启动（不使用配置文件）
+pm2 start dist/index.js --name galaxyex-engine --env-file .env
+```
+
+常用 PM2 命令：
+
+```bash
+pm2 list                      # 查看所有进程
+pm2 logs galaxyex-engine      # 查看日志
+pm2 restart galaxyex-engine   # 重启
+pm2 stop galaxyex-engine      # 停止
+pm2 delete galaxyex-engine    # 删除进程
+
+pm2 save                      # 保存当前进程列表
+pm2 startup                   # 设置开机自启
+```
+
 ### 默认账号
 
 系统启动后会自动创建演示账号：
@@ -237,6 +273,22 @@ node dist/index.js
 ```
 
 Set the environment variables (see above), especially `MONGODB_URI` pointing to your MongoDB instance (local, Atlas, etc.) and a strong `JWT_SECRET`.
+
+#### Using PM2 (recommended for production)
+
+A PM2 ecosystem config is included at `engine/ecosystem.config.cjs`:
+
+```bash
+npm install -g pm2
+
+cd engine
+npm ci
+npm run build
+cp .env.example .env          # configure MONGODB_URI, JWT_SECRET, etc.
+
+pm2 start ecosystem.config.cjs
+pm2 save && pm2 startup       # persist across reboots
+```
 
 ### Frontend (Vercel)
 
