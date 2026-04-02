@@ -29,14 +29,21 @@ This MVP is simulation-only:
 ### Option A — Docker Compose (recommended)
 
 ```bash
-# Start MongoDB + engine
+# Start all services (MongoDB + engine + frontend)
 docker compose up -d
-
-# Start frontend
-cd web && npm install && npm run dev
 ```
 
-The engine runs on `http://localhost:8080` and MongoDB on `localhost:27017`.
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:3000 |
+| Engine API | http://localhost:8080 |
+| MongoDB | localhost:27017 |
+
+To start only the backend stack without the frontend:
+
+```bash
+docker compose up -d mongodb engine
+```
 
 ### Option B — Manual
 
